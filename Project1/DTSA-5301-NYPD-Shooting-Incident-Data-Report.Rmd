@@ -1,0 +1,381 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: "Eric Yu"
+date: "2024-06-21"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This report is an analysis of the [NYPD Shooting Incident Data (Historic)](https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic), a data-set recording shooting incidents that occurred from 2006 to the present day in New York City. The goal of this project is to explore trends in the data and uncover potential insights that may help to understand the shooting incidents.
+
+## Research Questions
+- Where and when are shootings most likely to occur?
+- What are the demographics of perpetrators and victims?
+- Which factors are correlated with incidents that resulted in murders?
+
+## Importing Libraries and Data-set
+The analysis will be performed using R libraries. These tools will be used to import the data-set of interest, clean/transform the data, and generate results/visualizations.
+
+### Load R libraries
+```{r import R libraries, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+```
+### Load data-set from csv file
+```{r import data-set, warning=FALSE, message=FALSE}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+nypd_data <- read_csv(url)
+```
+
+### Tidy and clean data
+For the purposes of this report, some columns include extra information that are unnecessary for answering the research questions. I am interested in victim/perpetrator demographics information, and general descriptions of the locations of the incidents.
+
+#### Remove unnecessary columns
+```{r tidy_data, warning=FALSE, message=FALSE}
+nypd_data_cleaned <- nypd_data %>% 
+  select(-c(LOC_OF_OCCUR_DESC,
+            PRECINCT,
+            JURISDICTION_CODE,
+            LOC_CLASSFCTN_DESC,
+            Latitude,
+            Longitude,
+            Lon_Lat,
+            X_COORD_CD,Y_COORD_CD))
+```
+
+The dates and times at which the shootings occurred are given in  `MM/DD/YYYY` and `H:M:S` formats, respectively. For the purposes of this report, I will consider only the months and hours of the incidents for analysis.
+``` {r clean_date_time, warning=FALSE, message=FALSE}
+# Retain only the month of the incident
+nypd_data_cleaned$OCCUR_DATE <-
+  as.integer(substr(nypd_data_cleaned$OCCUR_DATE,
+                    start=1, 
+                    stop=2))
+
+# Convert month number to name of month
+nypd_data_cleaned$OCCUR_DATE <-
+  month.name[nypd_data_cleaned$OCCUR_DATE]
+
+# Shorten months to first three letters
+nypd_data_cleaned$OCCUR_DATE <-
+  substr(nypd_data_cleaned$OCCUR_DATE, start=1, stop=3) 
+
+# Retain only the hour of the incident
+nypd_data_cleaned$OCCUR_TIME <-
+  as.integer(substr(nypd_data_cleaned$OCCUR_TIME,
+                    start=1,
+                    stop=2))
+
+# Convert to AM/PM format
+am_pm_mapping <- c(`0`="12:00 AM", `1`="1:00 AM", `2`="2:00 AM",
+                   `3`="3:00 AM", `4`="4:00 AM", `5`="5:00 AM",
+                   `6`="6:00 AM", `7`="7:00 AM", `8`="8:00 AM",
+                   `9`="9:00 AM", `10`="10:00 AM", `11`="11:00 AM",
+                   `12`="12:00 PM", `13`="1:00 PM", `14`="2:00 PM",
+                   `15`="3:00 PM", `16`="4:00 PM", `17`="5:00 PM",
+                   `18`="6:00 PM", `19`="7:00 PM", `20`="8:00 PM",
+                   `21`="9:00 PM", `22`="10:00 PM", `23`="11:00 PM")
+nypd_data_cleaned$OCCUR_TIME <-
+  am_pm_mapping[as.character(nypd_data_cleaned$OCCUR_TIME)]
+```
+
+#### Remove entries with unknown values
+Some columns contain null values or values that do not make sense in the context of the other values in the column. I will drop rows that have these values since I cannot accurately interpret them.
+
+- **`PERP_AGE_GROUP`** and **`VIC_AGE_GROUP`** contain `"(null)"` values (distinct from `"UNKNOWN"`) and values that do not follow a standard format.
+- **`PERP_RACE`** contains `"(null)"` values (distinct from `"UNKNOWN"`)
+- **`LOCATION_DESC`** contains `"(null)"` values (distinct from `"NONE"`)
+
+``` {r remove_unknown, warning=FALSE, message=FALSE}
+excluded_age <- c("(null)", "1020", "1022", "1028", "224", "940")
+excluded_race <- c("(null)")
+excluded_loc <- c("(null)")
+
+nypd_data_cleaned <- nypd_data_cleaned %>%
+  filter(
+    !is.na(nypd_data_cleaned$PERP_AGE_GROUP),
+    !(nypd_data_cleaned$PERP_AGE_GROUP %in% excluded_age),
+    !is.na(nypd_data_cleaned$VIC_AGE_GROUP),
+    !(nypd_data_cleaned$VIC_AGE_GROUP %in% excluded_age),
+    !is.na(nypd_data_cleaned$PERP_RACE),
+    !(nypd_data_cleaned$PERP_RACE %in% excluded_race),
+    !is.na(nypd_data_cleaned$LOCATION_DESC),
+    !(nypd_data_cleaned$LOCATION_DESC %in% excluded_loc))
+
+glimpse(nypd_data_cleaned)
+```
+
+## Exploring the Data
+
+### Shooting incidents by location (borough)
+```{r shooting_boro_plot, warning=FALSE, message=FALSE}
+nypd_data_cleaned %>%
+  ggplot(aes(x=BORO)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Borough",
+       y="Number of shooting incidents",
+       title="Shooting incidents by Borough")
+```
+
+```{r shooting_boro_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$BORO)
+```
+
+The number of shootings that occurred in Staten Island appear to be significantly less than in the other four boroughs. This observation makes logical sense because the population of New York City is largely concentrated outside of Staten Island (roughly 490,000 in Staten Island, 7,800,000 in the other four boroughs in 2022).
+
+### Shooting incidents by month
+```{r shooting_month_plot, warning=FALSE, message=FALSE}
+month_order <- c("Jan", "Feb", "Mar", "Apr",
+                 "May", "Jun", "Jul", "Aug",
+                 "Sep", "Oct", "Nov", "Dec")
+
+# Order by month in plot, default order is alphabetical
+nypd_data_cleaned$OCCUR_DATE <- factor(nypd_data_cleaned$OCCUR_DATE, levels = month_order)
+
+nypd_data_cleaned %>%
+  ggplot(aes(x=OCCUR_DATE)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Month",
+       y="Number of shooting incidents",
+       title="Shooting incidents by Month")
+```
+
+```{r shooting_month_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$OCCUR_DATE)
+```
+
+The number of shootings appear to occur more frequently between June-August, which are summer months. There are several factors associated with the summer-time, which may be related to higher rates of shootings, such as heat, more frequent traveling (vacations), and more people going outdoors. However, the difference does not appear to be extremely significant.
+
+### Shooting incidents by time
+```{r shooting_time_plot, warning=FALSE, message=FALSE}
+time_order <- c("12:00 AM","1:00 AM","2:00 AM","3:00 AM",
+                "4:00 AM","5:00 AM","6:00 AM","7:00 AM", 
+                "8:00 AM","9:00 AM","10:00 AM","11:00 AM",
+                "12:00 PM","1:00 PM","2:00 PM","3:00 PM",
+                "4:00 PM","5:00 PM","6:00 PM","7:00 PM", 
+                "8:00 PM","9:00 PM","10:00 PM","11:00 PM")
+
+# Order by time in plot
+nypd_data_cleaned$OCCUR_TIME <- factor(nypd_data_cleaned$OCCUR_TIME, levels = time_order)
+
+nypd_data_cleaned %>%
+  ggplot(aes(x=OCCUR_TIME)) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Time",
+       y="Number of shooting incidents",
+       title="Shooting incidents by Time")
+```
+
+```{r shooting_time_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$OCCUR_TIME)
+```
+
+Shooting incidents appear to be most frequent during the evening to the early morning (past midnight but before sunrise). A possible explanation is that people tend to be asleep during these times and police activity may be lower at night, allowing perpetrators more opportunities to commit crimes.
+
+### Locations of shooting incidents
+```{r loc_of_incident_plot, warning=FALSE, message=FALSE}
+nypd_data_cleaned %>%
+  ggplot(aes(x=LOCATION_DESC)) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Location",
+       y="Number of shooting incidents",
+       title="Shooting incidents by Location")
+```
+
+```{r loc_of_incident_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$LOCATION_DESC)
+```
+
+Shooting incidents appear to occur mostly in apartment buildings and public housing. A possible explanation is that people tend to keep money and valuable possessions at their homes, which may be motivations for perpetrators. The privacy of homes also allow criminals to conceal their crimes, which can explain why shootings occur more frequently in homes than in public places.
+
+### Perpetrator and victim demographics
+
+```{r age_groups_perp_plot, warning=FALSE, message=FALSE}
+# Age groups
+nypd_data_cleaned %>%
+  ggplot(aes(x=PERP_AGE_GROUP)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Age Group",
+       y="Number of Perpetrators",
+       title="Perpetrators by Age Group")
+```
+
+```{r age_groups_perp_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$PERP_AGE_GROUP)
+```
+
+```{r age_groups_vic_plot, warning=FALSE, message=FALSE}
+nypd_data_cleaned %>%
+  ggplot(aes(x=VIC_AGE_GROUP)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Age Group", 
+       y="Number of Victims",
+       title="Victims by Age Group")
+```
+
+```{r age_groups_vic_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$VIC_AGE_GROUP)
+```
+
+In both groups (perpetrators and victims), shootings appear to mostly involve those between the ages of 18 and 44. A possible explanation for why most perpetrators are in those age groups could be that the ages 18-44 are when people are most physically active and have access to firearms. The age groups of the victims are similar, but are more weighted towards the 25-44 age group. A possible explanation is that there may be more motivation to commit a crime against those in that age group (have more possessions, money, etc.).
+
+```{r gender_perp_plot, warning=FALSE, message=FALSE}
+# Gender
+nypd_data_cleaned %>%
+  ggplot(aes(x=PERP_SEX)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Gender",
+       y="Number of Perpetrators",
+       title="Perpetrators by Gender")
+```
+
+```{r gender_perp_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$PERP_SEX)
+```
+
+```{r gender_vic_plot, warning=FALSE, message=FALSE}
+nypd_data_cleaned %>%
+  ggplot(aes(x=VIC_SEX)) +
+  theme_light() +
+  theme(plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Gender",
+       y="Number of Victims",
+       title="Victims by Gender")
+```
+
+```{r gender_vic_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$VIC_SEX)
+```
+In both groups, males tend to be more involved in shootings than females or unknown gender. According to the data, males account for 90% and 87% of perpetrators and victims, respectively.
+
+```{r race_perp_plot, warning=FALSE, message=FALSE}
+# Race
+nypd_data_cleaned %>%
+  ggplot(aes(x=PERP_RACE)) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Race",
+       y="Number of Perpetrators",
+       title="Perpetrators by Race")
+```
+
+```{r race_perp_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$PERP_RACE)
+```
+
+```{r race_vic_plot, warning=FALSE, message=FALSE}
+nypd_data_cleaned %>%
+  ggplot(aes(x=VIC_RACE)) +
+  theme_light() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    plot.title = element_text(hjust=0.5)) +
+  geom_bar(fill="#33ABF9") +
+  labs(x="Race",
+       y="Number of Victims",
+       title="Victims by Race")
+```
+
+```{r race_vic_count, warning=FALSE, message=FALSE}
+# Table of counts to extract exact values
+table(nypd_data_cleaned$VIC_RACE)
+```
+In most of the shootings, the perpetrators and victims were black. According to the data, black perpetrators account for 68% of all perpetrators, and black victims account for 69% of all victims.
+
+## Analysis
+
+### Logistic Regression
+I will use a logistic regression to identify factors that are significant to whether or not a shooting incident involved a murder.
+
+```{r log_regression, warning=FALSE, message=FALSE}
+# Model parameters
+
+# Incident info
+occur_date <- nypd_data_cleaned$OCCUR_DATE
+occur_time <- nypd_data_cleaned$OCCUR_TIME
+
+# Perpetrator/victim demographics
+age_grp_perp <- nypd_data_cleaned$PERP_AGE_GROUP
+age_grp_vic <- nypd_data_cleaned$VIC_AGE_GROUP
+gender_perp <- nypd_data_cleaned$PERP_SEX
+gender_vic <- nypd_data_cleaned$VIC_SEX
+race_perp <- nypd_data_cleaned$PERP_RACE
+race_vic <- nypd_data_cleaned$VIC_RACE
+
+# Murder (binary)
+murder <- nypd_data_cleaned$STATISTICAL_MURDER_FLAG
+
+# Logistic regression model
+log_reg <- glm(murder ~ 
+                 occur_date + occur_time + age_grp_perp +                           age_grp_vic + gender_perp + gender_vic + 
+                 race_perp + race_vic,
+               data = nypd_data_cleaned,
+               family = "binomial")
+
+summary(log_reg)
+```
+
+### Interpreting Results
+According to the model summary, murders appear to be strongly associated with age group, for both perpetrators and victims. The results suggest that perpetrators in the age groups `45-64` (**p-value = 3.24e-09 and z-value = 5.919**) have a strong positive correlation with a murder occurring. Victims in the age groups `65+` (**p-value = 1.06e-06 and z-value = 4.880**) have a strong positive correlation with murder. My interpretation of these results is that murders are most common when the victims are older and when perpetrators are roughly middle-aged.
+
+In my initial data exploration, I concluded that most of the shooting incidents involved black, male perpetrators and victims. However, the logistic regression model does not appear to suggest any significant correlation between race/gender and murder. 
+The dates and times of shootings also do not appear to be factors strongly associated with murder.
+
+### Bias
+My source of bias is how I define murder. In legal practice, there are distinctions between murder and manslaughter, namely intent and the circumstances surrounding them. To avoid introducing my biases in the analysis, I treated murder as death of victim in a shooting. There is no additional context provided (intent of perpetrator, retaliation from victim), so the most logical choice to me was to define murder as victim death.
+
+## Conclusion
+Referring back to my research questions:
+
+- Where and when are shootings most likely to occur?
+- What are the demographics of perpetrators and victims?
+- Which factors are correlated with incidents that resulted in murders?
+
+Shootings appear to occur mostly in public housing and apartments, likely due to lack of obstruction by police and incentives to commit associated crimes like robbery and burglary. Evenings and early morning immediately after midnight are the most common times for shootings to occur, possibly due to lower activity (both police and victim). The most common demographic among both perpetrators and victims is black male between the ages 18-44.
+
+Based on these observations, a suggestion I could make is to allocate more resources for home security. Multi-family homes and apartment complexes may benefit from extra security guards and monitoring systems, since these locations are where shootings occur the most. Police departments may want to consider allocating resources to monitor public activity during late hours. Additionally, dispatch and medical services may want to consider prioritizing victims above the age of 65, since this age group is the most likely to be involved in murders.
+
+Most factors related to the number of shooting incidents are not very strong predictors of whether or not a murder was in involved. Only perpetrator and victim age were suggested to be strongly correlated with murder.
+
+### Bibliography
+- https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+- https://www.tidyverse.org/packages/
+- https://www.citypopulation.de/en/usa/newyorkcity/
